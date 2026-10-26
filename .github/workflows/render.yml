@@ -45,6 +45,7 @@ jobs:
           cache-dependency-path: scripts/requirements.txt
 
       - name: Install dependencies
+        timeout-minutes: 10
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-noto-color-emoji
           npm ci
