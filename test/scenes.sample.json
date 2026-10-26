@@ -1,0 +1,4 @@
+{"judul":"Tes","jenis":"listicle","scenes":[
+{"type":"hook","narasi":"Kamu masih balas chat customer satu satu?","headline":"Masih balas chat manual?","emoji":"😩"},
+{"type":"workflow","narasi":"Pakai n8n, WhatsApp masuk langsung dijawab AI agent lalu dicatat ke sheets","headline":"Biar n8n yang kerja","nodes":["WhatsApp","AI Agent","Google Sheets"]},
+{"type":"cta","narasi":"Follow buat template gratisnya","headline":"Mau template-nya?","sub":"Follow sekarang"}]}
