@@ -1,3 +1,5 @@
 yt-dlp>=2025.1.1
-faster-whisper>=1.1.0
+faster-whisper==1.2.1
+# PyAV 16+ dropped open(metadata_errors=...), which faster-whisper still passes
+av>=14,<16
 requests>=2.32
