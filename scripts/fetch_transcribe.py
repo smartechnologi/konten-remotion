@@ -19,10 +19,20 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 CALLBACK_SECRET = os.environ.get("CALLBACK_SECRET", "")
 
 
+def annotate(level: str, message: str) -> None:
+    # Shows up as an annotation on the run, so failures are visible without opening the raw log.
+    print(f"::{level}::{message}".replace("\n", " "))
+
+
 def callback(payload: dict) -> None:
     headers = {"X-Callback-Secret": CALLBACK_SECRET} if CALLBACK_SECRET else {}
-    resp = requests.post(CALLBACK_URL, json={"job_id": JOB_ID, **payload}, headers=headers, timeout=30)
-    print(f"callback -> {resp.status_code}")
+    try:
+        resp = requests.post(CALLBACK_URL, json={"job_id": JOB_ID, **payload}, headers=headers, timeout=30)
+    except requests.RequestException as exc:
+        annotate("warning", f"callback failed: {exc}")
+        return
+    level = "notice" if resp.ok else "warning"
+    annotate(level, f"callback -> HTTP {resp.status_code}")
 
 
 def download_audio(workdir: Path) -> dict:
@@ -56,11 +66,13 @@ def main() -> int:
         try:
             meta = download_audio(Path(tmp))
         except Exception as exc:  # yt-dlp raises many different error types
+            annotate("error", f"download failed: {exc}")
             callback({"ok": False, "error": f"Gagal download video: {exc}"})
             return 1
         try:
             result = transcribe(meta.pop("audio_path"))
         except Exception as exc:
+            annotate("error", f"transcribe failed: {exc}")
             callback({"ok": False, "error": f"Gagal transkrip: {exc}", **meta})
             return 1
 
@@ -69,7 +81,7 @@ def main() -> int:
         result["transcript"] = f"(Video tanpa narasi) Caption: {meta['description']}"
 
     callback({"ok": True, **meta, **result})
-    print(json.dumps({**meta, **result}, ensure_ascii=False)[:500])
+    annotate("notice", json.dumps({**meta, **result}, ensure_ascii=False)[:500])
     return 0
 
 
