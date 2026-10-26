@@ -1,0 +1,114 @@
+name: Render video
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: konten_jobs row id in n8n
+        required: true
+      voice_url:
+        description: WAHA media URL of the voice note
+        required: true
+      scenes:
+        description: Scene plan JSON from n8n ({ judul, jenis, scenes })
+        required: true
+      callback_url:
+        description: n8n webhook that receives the finished video URL
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render-${{ inputs.job_id }}
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JOB_ID: ${{ inputs.job_id }}
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-noto-color-emoji
+          npm ci
+          pip install -r scripts/requirements.txt
+
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-${{ vars.WHISPER_MODEL || 'small' }}
+
+      - name: Download voice note
+        env:
+          VOICE_URL: ${{ inputs.voice_url }}
+          WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
+        run: |
+          mkdir -p out public
+          curl -fsSL ${WAHA_API_KEY:+-H "X-Api-Key: $WAHA_API_KEY"} "$VOICE_URL" -o out/voice.oga
+          # Normalise loudness so quiet phone recordings come out at a consistent level.
+          ffmpeg -loglevel error -y -i out/voice.oga -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 public/voice.mp3
+
+      - name: Write scene plan
+        env:
+          SCENES: ${{ inputs.scenes }}
+        run: python -c "import json,os; json.dump(json.loads(os.environ['SCENES']), open('out/scenes.json','w'), ensure_ascii=False)"
+
+      - name: Transcribe voice (word timestamps)
+        env:
+          WHISPER_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
+        run: python scripts/transcribe_words.py public/voice.mp3 out/words.json
+
+      - name: Build props
+        env:
+          HANDLE: ${{ vars.HANDLE }}
+        run: npm run props
+
+      - name: Render
+        run: npx remotion render src/index.ts Konten out/video.mp4 --props=out/props.json --codec=h264 --crf=20 --log=info
+
+      - name: Publish video as release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="job-${JOB_ID}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Konten #${JOB_ID}" --notes "Rendered from n8n job ${JOB_ID}"
+          gh release upload "$tag" out/video.mp4 out/props.json public/voice.mp3 --clobber
+          echo "VIDEO_URL=https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/video.mp4" >> "$GITHUB_ENV"
+
+      - name: Tell n8n the video is ready
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          body = json.dumps({"job_id": os.environ["JOB_ID"], "ok": True, "video_url": os.environ["VIDEO_URL"]}).encode()
+          req = urllib.request.Request(os.environ["CALLBACK_URL"], body, {"Content-Type": "application/json", "X-Callback-Secret": os.environ.get("CALLBACK_SECRET", "")})
+          print(urllib.request.urlopen(req, timeout=30).status)
+          PY
+
+      - name: Tell n8n the render failed
+        if: failure()
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          body = json.dumps({"job_id": os.environ["JOB_ID"], "ok": False, "error": f"Render gagal, cek log: {run}"}).encode()
+          req = urllib.request.Request(os.environ["CALLBACK_URL"], body, {"Content-Type": "application/json", "X-Callback-Secret": os.environ.get("CALLBACK_SECRET", "")})
+          urllib.request.urlopen(req, timeout=30)
+          PY
