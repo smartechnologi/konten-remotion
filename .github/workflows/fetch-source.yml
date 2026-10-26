@@ -1,0 +1,51 @@
+name: Fetch source + transcribe
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: konten_jobs row id in n8n
+        required: true
+      url:
+        description: TikTok / Instagram / YouTube link
+        required: true
+      callback_url:
+        description: n8n webhook that receives the transcript
+        required: true
+
+concurrency:
+  group: fetch-${{ inputs.job_id }}
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Install Python deps
+        run: pip install -r scripts/requirements.txt
+
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-${{ vars.WHISPER_MODEL || 'small' }}
+
+      - name: Download, transcribe, send to n8n
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          SOURCE_URL: ${{ inputs.url }}
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          WHISPER_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+        run: python scripts/fetch_transcribe.py
